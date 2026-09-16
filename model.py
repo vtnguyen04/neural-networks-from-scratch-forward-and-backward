@@ -684,23 +684,26 @@ def design_network(input_dim, num_classes, seed=0):
           )
 
     hidden_dim = 64
+
+    init_he = lambda in_d, out_d: initialize_weights(in_d, out_d, scheme="he")
+
     model = make_sequential([
       make_dense(
           input_dim,
           hidden_dim,
-          initialize_weights,
+          init_he,
       ),
       make_activation(kind="relu"),
       make_dense(
           hidden_dim,
           hidden_dim,
-          initialize_weights,
+          init_he,
       ),
       make_activation(kind="relu"),
       make_dense(
           hidden_dim,
           num_classes,
-          initialize_weights,
+          init_he,
       ),
     ])
 
