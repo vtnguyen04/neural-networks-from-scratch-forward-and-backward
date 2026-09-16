@@ -206,7 +206,7 @@ def initialize_weights(in_dim, out_dim, scheme='he'):
           " 'xavier', 'lecun'."
       )
 
-    W = np.random.normal(0, std, size = (in_dim, out_dim)) 
+    W = np.random.randn(in_dim, out_dim) * std 
 
     b = np.zeros(out_dim, dtype=float)
 
@@ -626,8 +626,96 @@ def train(model, loss_fn, optimizer, x, y, epochs, batch_size, seed=0):
 
     return history
 
-# Step 12 - design_network (not yet solved)
-# TODO: implement
+# Step 12 - design_network
+def design_network(input_dim, num_classes, seed=0):
+    """Design and train a net that solves a nonlinear classification task.
+
+    Inputs:
+      input_dim: int, feature dimension
+      num_classes: int, number of classes
+      seed: int, RNG seed for reproducibility
+
+    Returns:
+      model: trained sequential model (forward/backward/params)
+      metrics: dict with
+        'accuracy': float >= 0.90 on an evaluation set,
+        'x': np.ndarray (N, input_dim) eval features (N >= 50),
+        'y': np.ndarray (N,) integer eval labels.
+      The eval set (x, y) must not be linearly separable to high accuracy
+      (< 0.82 for a linear classifier), and the model's true accuracy on
+      it must match metrics['accuracy'] and be >= 0.90.
+    """
+    # TODO: your approach here
+    rng = np.random.default_rng(seed)
+
+    samples_per_class = max(50, int(np.ceil(120 / num_classes)))
+    n_total = samples_per_class * num_classes
+
+    x = np.zeros((n_total, input_dim), dtype=float)
+    y = np.zeros(n_total, dtype=int)
+
+    for c in range(num_classes):
+      start, end = c * samples_per_class, (c + 1) * samples_per_class
+      y[start:end] = c
+
+      if input_dim == 1:
+        if c == 0:
+          x[start:end, 0] = rng.uniform(-0.35, 0.35, size=samples_per_class)
+        else:
+          signs = rng.choice([-1.0, 1.0], size=samples_per_class)
+          radii = rng.uniform(
+              c * 0.9 + 0.2, c * 0.9 + 0.7, size=samples_per_class
+          )
+          x[start:end, 0] = signs * radii
+      else:
+        angles = rng.uniform(0.0, 2.0 * np.pi, size=samples_per_class)
+        radii = (
+            rng.uniform(0.05, 0.45, size=samples_per_class)
+            if c == 0
+            else rng.uniform(
+                c * 0.9 + 0.2, c * 0.9 + 0.7, size=samples_per_class
+            )
+        )
+        x[start:end, 0] = radii * np.cos(angles)
+        x[start:end, 1] = radii * np.sin(angles)
+        if input_dim > 2:
+          x[start:end, 2:] = rng.normal(
+              0.0, 0.01, size=(samples_per_class, input_dim - 2)
+          )
+
+    hidden_dim = 64
+    model = make_sequential([
+        make_dense(input_dim, hidden_dim, initialize_weights(input_dim, hidden_dim, scheme='he')),
+        make_activation(kind='relu'),
+        make_dense(hidden_dim, hidden_dim, initialize_weights(hidden_dim, hidden_dim, scheme='he')),
+        make_activation(kind='relu'),
+        make_dense(hidden_dim, num_classes, initialize_weights(hidden_dim, num_classes, scheme='he')),
+    ])
+
+    loss_fn = make_loss(kind="cross_entropy")
+    optimizer = make_optimizer(model["params"], lr=0.03, kind="adam")
+
+    history = train(
+        model=model,
+        loss_fn=loss_fn,
+        optimizer=optimizer,
+        x=x,
+        y=y,
+        epochs=150,
+        batch_size=32,
+        seed=seed,
+    )
+
+    logits, _ = model["forward"](x)
+    acc = float(np.mean(np.argmax(logits, axis=1) == y))
+
+    metrics = {
+        "accuracy": acc,
+        "x": x,
+        "y": y,
+    }
+
+    return model, metrics
 
 # Step 13 - improve_generalization (not yet solved)
 # TODO: implement
