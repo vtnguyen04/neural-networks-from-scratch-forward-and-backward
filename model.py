@@ -560,8 +560,27 @@ def make_optimizer(
   )
   return optimizer_instance.as_contract_dict()
 
-# Step 10 - train_step (not yet solved)
-# TODO: implement
+# Step 10 - train_step
+def train_step(model, loss_fn, optimizer, x_batch, y_batch):
+    """Perform one complete optimization step over a minibatch.
+
+    Inputs:
+      model: sequential model dict with 'forward', 'backward', and 'params'
+      loss_fn: callable (logits, y) -> (loss, d_logits)
+      optimizer: dict with 'step'(grads) applying in-place parameter updates
+      x_batch: np.ndarray of shape (B, D)
+      y_batch: np.ndarray of shape (B,) integer class labels
+
+    Returns:
+      loss: float, scalar batch loss evaluated BEFORE the parameter update.
+      Model parameters are updated in place; shapes unchanged and values finite.
+    """
+    # TODO: your approach here
+    loss, param_grads = forward_backward(model, loss_fn, x_batch, y_batch)
+
+    optimizer["step"](param_grads)
+
+    return float(loss)
 
 # Step 11 - train (not yet solved)
 # TODO: implement
