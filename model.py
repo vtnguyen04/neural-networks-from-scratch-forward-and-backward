@@ -685,11 +685,23 @@ def design_network(input_dim, num_classes, seed=0):
 
     hidden_dim = 64
     model = make_sequential([
-        make_dense(input_dim, hidden_dim, initialize_weights(input_dim, hidden_dim, scheme='he')),
-        make_activation(kind='relu'),
-        make_dense(hidden_dim, hidden_dim, initialize_weights(hidden_dim, hidden_dim, scheme='he')),
-        make_activation(kind='relu'),
-        make_dense(hidden_dim, num_classes, initialize_weights(hidden_dim, num_classes, scheme='he')),
+      make_dense(
+          input_dim,
+          hidden_dim,
+          initialize_weights,
+      ),
+      make_activation(kind="relu"),
+      make_dense(
+          hidden_dim,
+          hidden_dim,
+          initialize_weights,
+      ),
+      make_activation(kind="relu"),
+      make_dense(
+          hidden_dim,
+          num_classes,
+          initialize_weights,
+      ),
     ])
 
     loss_fn = make_loss(kind="cross_entropy")
