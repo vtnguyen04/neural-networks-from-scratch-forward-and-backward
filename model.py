@@ -186,8 +186,64 @@ def initialize_weights(in_dim, out_dim, scheme='he'):
 
     return W, b
 
-# Step 6 - make_loss (not yet solved)
-# TODO: implement
+# Step 6 - make_loss
+def make_loss(kind='cross_entropy'):
+    """Return a classification loss_fn(logits, labels) -> (loss, d_logits).
+
+    Inputs to loss_fn:
+      logits: (batch, C) float array of raw class scores
+      labels: (batch,) int array of class indices in [0, C)
+    Outputs:
+      loss: Python float, mean scalar loss over the batch (finite)
+      d_logits: (batch, C) gradient of loss w.r.t. logits (finite)
+    Must pass gradient_check, be minimized by confident correct predictions,
+    and stay finite under saturated logits.
+    """
+    # TODO: your approach here
+    if kind != "cross_entropy":
+      raise ValueError(f"Unsupported loss kind: '{kind}'. Choose 'cross_entropy'.")
+
+    def loss_fn(
+        logits: np.ndarray, labels: np.ndarray
+    ) -> tuple[float, np.ndarray]:
+      """Compute mean cross-entropy loss and its analytic gradient w.r.t logits.
+
+      Args:
+          logits: Unnormalized class scores of shape (batch, C).
+          labels: 1D array of integer ground-truth class indices in [0, C) of
+            shape (batch,).
+
+      Returns:
+          loss: Python float, mean loss across the batch.
+          d_logits: Gradient of loss w.r.t logits, shape (batch, C).
+      """
+      N, C = logits.shape
+      if N == 0:
+        return 0.0, np.zeros_like(logits, dtype=float)
+
+      max_logits = np.max(logits, axis=1, keepdims=True)
+      shifted = logits - max_logits
+      exp_shifted = np.exp(shifted)
+      sum_exp = np.sum(exp_shifted, axis=1, keepdims=True)
+
+      probs = exp_shifted / sum_exp
+
+      # Sample loss: L_i = -log(p_{i, y_i}) = log(sum(exp(z - m))) - (z_{y_i} - m)
+      batch_idx = np.arange(N)
+      log_sum_exp = np.log(sum_exp).squeeze(axis=1)
+      correct_shifted = shifted[batch_idx, labels]
+      sample_losses = log_sum_exp - correct_shifted
+
+      loss = float(np.mean(sample_losses))
+
+      # Analytic gradient w.r.t logits: dL / dz_{i, c} = (p_{i, c} - 1[c == y_i]) / N
+      d_logits = probs.copy()
+      d_logits[batch_idx, labels] -= 1.0
+      d_logits /= N
+
+      return loss, d_logits
+
+    return loss_fn
 
 # Step 7 - make_sequential (not yet solved)
 # TODO: implement
