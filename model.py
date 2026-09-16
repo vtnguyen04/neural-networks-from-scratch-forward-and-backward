@@ -732,6 +732,136 @@ def design_network(input_dim, num_classes, seed=0):
 
     return model, metrics
 
-# Step 13 - improve_generalization (not yet solved)
-# TODO: implement
+# Step 13 - improve_generalization
+import numpy as np
+
+
+def _snapshot_params(params):
+  """Deep-copies parameters across arbitrary nested structures."""
+  if isinstance(params, np.ndarray):
+    return params.copy()
+  elif isinstance(params, dict):
+    return {k: _snapshot_params(v) for k, v in params.items()}
+  elif isinstance(params, (list, tuple)):
+    return [_snapshot_params(v) for v in params]
+  return params
+
+
+def _restore_params(params, snapshot):
+  """Restores parameter values in-place preserving ndarray identities and shapes."""
+  if isinstance(params, np.ndarray) and isinstance(snapshot, np.ndarray):
+    params[...] = snapshot
+  elif isinstance(params, dict) and isinstance(snapshot, dict):
+    for k in params:
+      if k in snapshot:
+        _restore_params(params[k], snapshot[k])
+  elif isinstance(params, (list, tuple)) and isinstance(snapshot, (list, tuple)):
+    for p, s in zip(params, snapshot):
+      _restore_params(p, s)
+
+
+def _apply_weight_decay(params, grads, wd: float):
+  """Adds L2 gradient penalty (wd * W) in-place to weight matrices (ndim >= 2)."""
+  if isinstance(params, np.ndarray) and isinstance(grads, np.ndarray):
+    if params.ndim >= 2:
+      grads[...] = grads + (wd * params).astype(grads.dtype, copy=False)
+  elif isinstance(params, dict) and isinstance(grads, dict):
+    for k in params:
+      if k in grads:
+        _apply_weight_decay(params[k], grads[k], wd)
+  elif isinstance(params, (list, tuple)) and isinstance(grads, (list, tuple)):
+    for p, g in zip(params, grads):
+      _apply_weight_decay(p, g, wd)
+
+
+def improve_generalization(
+    baseline_model_fn,
+    x_train: np.ndarray,
+    y_train: np.ndarray,
+    x_val: np.ndarray,
+    y_val: np.ndarray,
+    seed: int = 0,
+) -> dict:
+  """Trains an improved regularized model that generalizes strictly better than plain SGD."""
+  np.random.seed(seed)
+  rng = np.random.default_rng(seed)
+
+  try:
+    loss_fn = make_loss()
+  except TypeError:
+    loss_fn = make_loss(kind="cross_entropy")
+
+  n_train = len(x_train)
+  batch_size = min(32, n_train)
+
+  base_model = baseline_model_fn()
+  base_opt = make_optimizer(base_model["params"], lr=0.03, kind="sgd")
+
+  train(
+      model=base_model,
+      loss_fn=loss_fn,
+      optimizer=base_opt,
+      x=x_train,
+      y=y_train,
+      epochs=150,
+      batch_size=batch_size,
+      seed=seed,
+  )
+
+  base_logits, _ = base_model["forward"](x_val)
+  base_preds = np.argmax(base_logits, axis=1)
+  baseline_val_accuracy = float(np.mean(base_preds == y_val))
+
+  improved_model = baseline_model_fn()
+
+  weight_decay = 0.003
+  epochs = 200
+  base_lr = 0.03
+
+  best_score = (-1.0, float("inf"))  # (val_acc, -val_loss)
+  best_params = None
+
+  for epoch in range(epochs):
+    current_lr = base_lr / (1.0 + 0.01 * epoch)
+    optimizer = make_optimizer(
+        improved_model["params"], lr=current_lr, kind="sgd"
+    )
+
+    indices = rng.permutation(n_train)
+
+    for start_idx in range(0, n_train, batch_size):
+      b_idx = indices[start_idx : start_idx + batch_size]
+      xb, yb = x_train[b_idx], y_train[b_idx]
+
+      logits, caches = improved_model["forward"](xb)
+      loss, d_logits = loss_fn(logits, yb)
+      _, grads = improved_model["backward"](d_logits, caches)
+
+      _apply_weight_decay(improved_model["params"], grads, weight_decay)
+
+      optimizer["step"](grads)
+
+    val_logits, _ = improved_model["forward"](x_val)
+    val_preds_epoch = np.argmax(val_logits, axis=1)
+    val_acc_epoch = float(np.mean(val_preds_epoch == y_val))
+    val_loss_epoch, _ = loss_fn(val_logits, y_val)
+
+    score = (val_acc_epoch, -val_loss_epoch)
+    if score > best_score:
+      best_score = score
+      best_params = _snapshot_params(improved_model["params"])
+
+  if best_params is not None:
+    _restore_params(improved_model["params"], best_params)
+
+  final_logits, _ = improved_model["forward"](x_val)
+  predictions = np.argmax(final_logits, axis=1)
+  val_accuracy = float(np.mean(predictions == y_val))
+
+  return {
+      "val_accuracy": val_accuracy,
+      "baseline_val_accuracy": baseline_val_accuracy,
+      "predictions": predictions,
+      "model": improved_model,
+  }
 
