@@ -343,8 +343,222 @@ def forward_backward(model, loss_fn, x, y):
 
     return float(loss), param_grads
 
-# Step 9 - make_optimizer (not yet solved)
-# TODO: implement
+# Step 9 - make_optimizer
+from abc import ABC, abstractmethod
+from typing import Any, Callable, Dict, List, Type, Union
+import numpy as np
+
+def traverse_params_grads(params: Any, grads: Any, callback: Callable) -> None:
+  """Walks any arbitrary nested tree of params and grads in lockstep."""
+  if isinstance(params, np.ndarray) and isinstance(grads, np.ndarray):
+    if params.size > 0:
+      callback(params, grads)
+  elif isinstance(params, dict) and isinstance(grads, dict):
+    for k, p_val in params.items():
+      if k in grads:
+        traverse_params_grads(p_val, grads[k], callback)
+  elif isinstance(params, (list, tuple)) and isinstance(grads, (list, tuple)):
+    for p_item, g_item in zip(params, grads):
+      traverse_params_grads(p_item, g_item, callback)
+
+class BaseOptimizer(ABC):
+
+  def __init__(self, params: Any, lr: float = 1e-2):
+    if lr <= 0.0:
+      raise ValueError(f"Learning rate must be positive, got {lr}")
+    self.params = params
+    self.lr = float(lr)
+    self.state: Dict[int, Dict[str, Any]] = {}
+    self._init_state()
+
+  def _init_state(self) -> None:
+    """Collects and initializes state for each parameter ndarray."""
+
+    def _register(p: np.ndarray, _):
+      self.state[id(p)] = self._init_param_state(p)
+
+    traverse_params_grads(self.params, self.params, _register)
+
+  @abstractmethod
+  def _init_param_state(self, p: np.ndarray) -> Dict[str, Any]:
+    """Return initial buffer states for a single parameter tensor."""
+    pass
+
+  @abstractmethod
+  def _update_param(
+      self, p: np.ndarray, g: np.ndarray, state: Dict[str, Any]
+  ) -> None:
+    """Compute and apply in-place delta on p using its gradient and state."""
+    pass
+
+  def step(self, grads: Any) -> None:
+    """Applies one optimization step mutating parameters in-place."""
+
+    def _apply(p: np.ndarray, g: np.ndarray):
+      p_id = id(p)
+      if p_id not in self.state:
+        self.state[p_id] = self._init_param_state(p)
+      self._update_param(p, g, self.state[p_id])
+
+    traverse_params_grads(self.params, grads, _apply)
+
+  def as_contract_dict(self) -> Dict[str, Any]:
+    """Returns standard dict interface required by the contract."""
+    return {
+        "step": self.step,
+        "params": self.params,
+        "lr": self.lr,
+        "optimizer": self,
+    }
+
+class SGDOptimizer(BaseOptimizer):
+  """Standard Stochastic Gradient Descent."""
+
+  def _init_param_state(self, p: np.ndarray) -> Dict[str, Any]:
+    return {}
+
+  def _update_param(
+      self, p: np.ndarray, g: np.ndarray, state: Dict[str, Any]
+  ) -> None:
+    delta = (self.lr * g).astype(p.dtype, copy=False)
+    p[...] -= delta
+
+
+class MomentumOptimizer(BaseOptimizer):
+  """SGD with Polyak Momentum."""
+
+  def __init__(self, params: Any, lr: float = 1e-2, momentum: float = 0.9):
+    self.momentum = float(momentum)
+    super().__init__(params, lr)
+
+  def _init_param_state(self, p: np.ndarray) -> Dict[str, Any]:
+    return {"velocity": np.zeros_like(p, dtype=float)}
+
+  def _update_param(
+      self, p: np.ndarray, g: np.ndarray, state: Dict[str, Any]
+  ) -> None:
+    v = state["velocity"]
+    v[...] = self.momentum * v + g
+    delta = (self.lr * v).astype(p.dtype, copy=False)
+    p[...] -= delta
+
+
+class RMSpropOptimizer(BaseOptimizer):
+  """Root Mean Square Propagation (Hinton)."""
+
+  def __init__(
+      self,
+      params: Any,
+      lr: float = 1e-2,
+      decay_rate: float = 0.99,
+      eps: float = 1e-8,
+  ):
+    self.decay_rate = float(decay_rate)
+    self.eps = float(eps)
+    super().__init__(params, lr)
+
+  def _init_param_state(self, p: np.ndarray) -> Dict[str, Any]:
+    return {"sq_avg": np.zeros_like(p, dtype=float)}
+
+  def _update_param(
+      self, p: np.ndarray, g: np.ndarray, state: Dict[str, Any]
+  ) -> None:
+    sq_avg = state["sq_avg"]
+    sq_avg[...] = self.decay_rate * sq_avg + (1.0 - self.decay_rate) * (g**2)
+    step_val = g / (np.sqrt(sq_avg) + self.eps)
+    delta = (self.lr * step_val).astype(p.dtype, copy=False)
+    p[...] -= delta
+
+
+class AdamOptimizer(BaseOptimizer):
+  """Adaptive Moment Estimation (Kingma & Ba)."""
+
+  def __init__(
+      self,
+      params: Any,
+      lr: float = 1e-3,
+      beta1: float = 0.9,
+      beta2: float = 0.999,
+      eps: float = 1e-8,
+  ):
+    self.beta1 = float(beta1)
+    self.beta2 = float(beta2)
+    self.eps = float(eps)
+    super().__init__(params, lr)
+
+  def _init_param_state(self, p: np.ndarray) -> Dict[str, Any]:
+    return {
+        "m": np.zeros_like(p, dtype=float),
+        "v": np.zeros_like(p, dtype=float),
+        "t": 0,
+    }
+
+  def _update_param(
+      self, p: np.ndarray, g: np.ndarray, state: Dict[str, Any]
+  ) -> None:
+    state["t"] += 1
+    t = state["t"]
+    m, v = state["m"], state["v"]
+
+    m[...] = self.beta1 * m + (1.0 - self.beta1) * g
+    v[...] = self.beta2 * v + (1.0 - self.beta2) * (g**2)
+
+    # Bias correction
+    m_hat = m / (1.0 - self.beta1**t)
+    v_hat = v / (1.0 - self.beta2**t)
+
+    step_val = m_hat / (np.sqrt(v_hat) + self.eps)
+    delta = (self.lr * step_val).astype(p.dtype, copy=False)
+    p[...] -= delta
+
+
+class OptimizerFactory:
+  """Registry-based Creational Factory for optimizers."""
+
+  _registry: Dict[str, Type[BaseOptimizer]] = {}
+
+  @classmethod
+  def register(cls, name: str, optimizer_cls: Type[BaseOptimizer]) -> None:
+    """Registers a new optimizer class dynamically."""
+    cls._registry[name.lower()] = optimizer_cls
+
+  @classmethod
+  def create(
+      cls, kind: str, params: Any, lr: float = 1e-2, **kwargs
+  ) -> BaseOptimizer:
+    """Instantiates and returns the requested optimizer product."""
+    kind_clean = kind.lower().strip()
+    optimizer_cls = cls._registry.get(kind_clean)
+    if optimizer_cls is None:
+      supported = list(cls._registry.keys())
+      raise ValueError(
+          f"Unsupported optimizer: '{kind}'. Registered options: {supported}"
+      )
+    return optimizer_cls(params, lr=lr, **kwargs)
+
+OptimizerFactory.register("sgd", SGDOptimizer)
+OptimizerFactory.register("momentum", MomentumOptimizer)
+OptimizerFactory.register("rmsprop", RMSpropOptimizer)
+OptimizerFactory.register("adam", AdamOptimizer)
+
+def make_optimizer(
+    params: Any, lr: float = 1e-2, kind: str = "sgd", **kwargs
+) -> Dict[str, Any]:
+  """Constructs an optimizer honoring the system contract via Factory Pattern.
+
+  Args:
+      params: Arbitrary nested parameter structure (list, dict, array).
+      lr: Positive float learning rate.
+      kind: Name of algorithm ('sgd', 'momentum', 'rmsprop', 'adam').
+      **kwargs: Hyperparameters passed to specific optimizer algorithms.
+
+  Returns:
+      Mapping dict with at least {'step': callable(grads) -> None}.
+  """
+  optimizer_instance = OptimizerFactory.create(
+      kind=kind, params=params, lr=lr, **kwargs
+  )
+  return optimizer_instance.as_contract_dict()
 
 # Step 10 - train_step (not yet solved)
 # TODO: implement
