@@ -733,9 +733,6 @@ def design_network(input_dim, num_classes, seed=0):
     return model, metrics
 
 # Step 13 - improve_generalization
-import numpy as np
-
-
 def _snapshot_params(params):
   """Deep-copies parameters across arbitrary nested structures."""
   if isinstance(params, np.ndarray):
