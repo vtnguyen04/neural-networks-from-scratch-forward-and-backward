@@ -92,8 +92,64 @@ def make_dense(in_dim, out_dim, weight_init_fn):
 
     return {"params": params, "forward": forward, "backward": backward}
 
-# Step 4 - make_activation (not yet solved)
-# TODO: implement
+# Step 4 - make_activation
+def make_activation(kind='relu'):
+    """Create a genuinely nonlinear elementwise activation layer.
+
+    Args:
+        kind: str nonlinearity name. Default 'relu' must implement ReLU
+              (zero negatives, pass non-negatives). Other kinds optional.
+
+    Returns:
+        Layer dict with:
+          forward(x) -> (y, cache)
+            x, y: np.ndarray shape (batch, dim)
+          backward(dout, cache) -> (dx, {})
+            dout, dx: np.ndarray shape (batch, dim)
+            param grad dict is always empty (no learnable params)
+
+    Must be elementwise and non-affine; analytic dx must match
+    numerical_gradient / gradient_check.
+    """
+    # TODO: your approach here
+    if kind.lower() != "relu":
+      raise ValueError(f"Unsupported activation kind: {kind}")
+
+    params: dict[str, np.ndarray] = {}
+
+    def forward(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+      """Elementwise activation forward pass.
+
+      Args:
+          x: Input tensor of shape (batch, dim).
+
+      Returns:
+          y: Activated tensor of shape (batch, dim).
+          cache: Cached pre-activation input x.
+      """
+      y = np.maximum(0.0, x)
+      cache = x
+      return y, cache
+
+    def backward(
+        dout: np.ndarray, cache: np.ndarray
+    ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+      """Elementwise activation backward pass.
+
+      Args:
+          dout: Upstream gradient dL/dy of shape (batch, dim).
+          cache: Cached pre-activation tensor x from forward pass.
+
+      Returns:
+          dx: Gradient dL/dx of shape (batch, dim).
+          param_grads: Empty dict {} matching params.
+      """
+      x = cache
+      dx = np.where(x > 0.0, dout, 0.0).astype(dout.dtype)
+      param_grads: dict[str, np.ndarray] = {}
+      return dx, param_grads
+
+    return {"params": params, "forward": forward, "backward": backward}
 
 # Step 5 - initialize_weights (not yet solved)
 # TODO: implement
