@@ -93,63 +93,89 @@ def make_dense(in_dim, out_dim, weight_init_fn):
     return {"params": params, "forward": forward, "backward": backward}
 
 # Step 4 - make_activation
-def make_activation(kind='relu'):
-    """Create a genuinely nonlinear elementwise activation layer.
+from typing import Any, Callable
+import numpy as np
 
-    Args:
-        kind: str nonlinearity name. Default 'relu' must implement ReLU
-              (zero negatives, pass non-negatives). Other kinds optional.
+class ReLUStrategy:
 
-    Returns:
-        Layer dict with:
-          forward(x) -> (y, cache)
-            x, y: np.ndarray shape (batch, dim)
-          backward(dout, cache) -> (dx, {})
-            dout, dx: np.ndarray shape (batch, dim)
-            param grad dict is always empty (no learnable params)
+  @staticmethod
+  def forward(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    y = np.maximum(0.0, x)
+    cache = x  
+    return y, cache
 
-    Must be elementwise and non-affine; analytic dx must match
-    numerical_gradient / gradient_check.
-    """
-    # TODO: your approach here
-    if kind.lower() != "relu":
-      raise ValueError(f"Unsupported activation kind: {kind}")
+  @staticmethod
+  def backward(dout: np.ndarray, cache: np.ndarray) -> np.ndarray:
+    x = cache
+    return np.where(x > 0.0, dout, 0.0)
 
-    params: dict[str, np.ndarray] = {}
 
-    def forward(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-      """Elementwise activation forward pass.
+class SigmoidStrategy:
 
-      Args:
-          x: Input tensor of shape (batch, dim).
+  @staticmethod
+  def forward(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    pos_mask = x >= 0
+    y = np.empty_like(x, dtype=float)
+    y[pos_mask] = 1.0 / (1.0 + np.exp(-x[pos_mask]))
+    exp_x = np.exp(x[~pos_mask])
+    y[~pos_mask] = exp_x / (1.0 + exp_x)
+    cache = y 
+    return y, cache
 
-      Returns:
-          y: Activated tensor of shape (batch, dim).
-          cache: Cached pre-activation input x.
-      """
-      y = np.maximum(0.0, x)
-      cache = x
-      return y, cache
+  @staticmethod
+  def backward(dout: np.ndarray, cache: np.ndarray) -> np.ndarray:
+    y = cache
+    return dout * y * (1.0 - y)
 
-    def backward(
-        dout: np.ndarray, cache: np.ndarray
-    ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
-      """Elementwise activation backward pass.
 
-      Args:
-          dout: Upstream gradient dL/dy of shape (batch, dim).
-          cache: Cached pre-activation tensor x from forward pass.
+class TanhStrategy:
+  @staticmethod
+  def forward(x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    y = np.tanh(x)
+    cache = y 
+    return y, cache
 
-      Returns:
-          dx: Gradient dL/dx of shape (batch, dim).
-          param_grads: Empty dict {} matching params.
-      """
-      x = cache
-      dx = np.where(x > 0.0, dout, 0.0).astype(dout.dtype)
-      param_grads: dict[str, np.ndarray] = {}
-      return dx, param_grads
+  @staticmethod
+  def backward(dout: np.ndarray, cache: np.ndarray) -> np.ndarray:
+    y = cache
+    return dout * (1.0 - y**2)
 
-    return {"params": params, "forward": forward, "backward": backward}
+
+ACTIVATION_REGISTRY = {
+    "relu": ReLUStrategy,
+    "sigmoid": SigmoidStrategy,
+    "tanh": TanhStrategy,
+}
+
+def make_activation(kind: str = "relu") -> dict[str, Any]:
+  """Create a genuinely nonlinear elementwise activation layer.
+
+  Args:
+      kind: str nonlinearity name ('relu', 'sigmoid', 'tanh'). Default 'relu'.
+
+  Returns:
+      Layer dict with 'params', 'forward', and 'backward'.
+  """
+  strategy_cls = ACTIVATION_REGISTRY.get(kind.lower())
+  if strategy_cls is None:
+    valid_keys = list(ACTIVATION_REGISTRY.keys())
+    raise ValueError(
+        f"Unsupported activation kind: '{kind}'. Available: {valid_keys}"
+    )
+
+  params: dict[str, np.ndarray] = {}
+
+  def forward(x: np.ndarray) -> tuple[np.ndarray, Any]:
+    y, cache = strategy_cls.forward(x)
+    return y, cache
+
+  def backward(
+      dout: np.ndarray, cache: Any
+  ) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    dx = strategy_cls.backward(dout, cache)
+    return dx, {}
+
+  return {"params": params, "forward": forward, "backward": backward}
 
 # Step 5 - initialize_weights
 def initialize_weights(in_dim, out_dim, scheme='he'):
@@ -245,8 +271,51 @@ def make_loss(kind='cross_entropy'):
 
     return loss_fn
 
-# Step 7 - make_sequential (not yet solved)
-# TODO: implement
+# Step 7 - make_sequential
+def make_sequential(layers):
+    """Compose protocol-honoring layers into one sequential model.
+
+    Inputs:
+      layers: list of layer dicts, each with
+        forward(x) -> (y, cache),
+        backward(dout, cache) -> (dx, grads_dict),
+        params: dict of ndarrays (possibly empty).
+
+    Returns a dict with:
+      forward(x) -> (y, caches)
+        y: final activation after applying every layer in order
+        caches: opaque structure needed by backward
+      backward(dout, caches) -> (dx, grads_list)
+        dx: gradient w.r.t. the original input x
+        grads_list: list of length len(layers); grads_list[i] is the
+          grads_dict from layers[i] ({} for param-free layers)
+      params: aggregated live view of all layer params, length len(layers),
+        same order as layers (so in-place updates affect the model)
+    """
+    # TODO: your approach here
+    params = [layer["params"] for layer in layers]
+
+    def forward(x):
+      caches = []
+      out = x
+      for layer in layers:
+        out, cache = layer["forward"](out)
+        caches.append(cache)
+      return out, caches
+
+    def backward(dout, caches):
+      grads_list = [None] * len(layers)
+      din = dout
+      for i in reversed(range(len(layers))):
+        din, grads = layers[i]["backward"](din, caches[i])
+        grads_list[i] = grads
+      return din, grads_list
+
+    return {
+      "forward": forward,
+      "backward": backward,
+      "params": params,
+    }
 
 # Step 8 - forward_backward (not yet solved)
 # TODO: implement
